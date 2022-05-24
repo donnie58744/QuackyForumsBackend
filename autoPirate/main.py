@@ -24,11 +24,12 @@ class FtpUploadTracker:
     
     def handle(self, block):
         self.sizeWritten += 1024
-        percentComplete = round((self.sizeWritten / self.totalSize) *100)
+        percentComplete = (self.sizeWritten / self.totalSize) *100
         
         if (self.lastShownPercent != percentComplete):
             self.lastShownPercent = percentComplete
             print(f"Uploading: {percentComplete}%")
+            return percentComplete
 
 class main():
     plexRequestAmount = 0
@@ -37,6 +38,13 @@ class main():
     searchedMedia = []
     plexFolders = ['Movies', 'Shows']
     torrentClientOpen = False
+    uploading = False
+
+    FTPip = ""
+    FTPusername = ""
+    FTPPassword = ""
+    quackyosUsername = ""
+    quackyosPassword = ""
 
     def createMagnetURL(torrentList, torrentURL):
         for i in torrentList:
@@ -73,7 +81,7 @@ class main():
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:55.0) Gecko/20100101 Firefox/55.0',
         }
-        pload= {'username':'QUACKYOS_USERNAME', 'password':'QUACKYOS_PASSWORD', 'id':mediaId,'status':status}
+        pload= {'username':main.quackyosUsername, 'password':main.quackyosPassword, 'id':mediaId,'status':status}
         r = requests.post('https://www.quackyos.com/QuackyForum/scripts/changeStatus.php', data=pload, headers=headers, timeout=10)
         print(r.text)
 
@@ -81,13 +89,13 @@ class main():
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:55.0) Gecko/20100101 Firefox/55.0',
         }
-        pload= {'username':'QUACKYOS_USERNAME', 'password':'QUACKYOS_PASSWORD', 'deleteId':mediaId}
+        pload= {'username':main.quackyosUsername, 'password':main.quackyosPassword, 'deleteId':mediaId}
         r = requests.post('https://www.quackyos.com/QuackyForum/scripts/deleteAndNotify.php', data=pload, headers=headers, timeout=30)
         print(r.text)
 
     def uploadMedia(fileLocation, mediaId, status):
-        ftp = ftplib.FTP("FTP IP")
-        ftp.login("FTP USERNAME", "FTP PASSWORD")
+        ftp = ftplib.FTP(main.FTPip)
+        ftp.login(main.FTPusername, main.FTPPassword)
 
         mediaType = fileLocation
         if ('Movies' in mediaType):
@@ -115,9 +123,12 @@ class main():
                         # FTP upload
                         file = open(f'{fileLocation}/{searchFile}','rb')
                         uploadTracker = FtpUploadTracker(int(totalSize))
-                        if (ftp.storbinary(f'STOR {searchFile}', file, 1024, uploadTracker.handle)):
+                        if (ftp.storbinary(f'STOR {searchFile}', file, 1024, uploadTracker.handle) or uploadTracker.handle() > 100):
+                            file.close()
+                            ftp.quit()
                             print(f"Uploaded {searchFile}")
-                            main.deleteAndNotifyPlexRequest(mediaId)
+                        main.deleteAndNotifyPlexRequest(mediaId)
+                        main.uploading = False
                     except Exception as e:
                         print("File Type Not Found: " + str(e))
 
@@ -227,6 +238,7 @@ class main():
                 qbt_client.torrents.pause.all()
                 sleep(5)
                 print('Disconnecting VPN...')
+                main.uploading = True
                 main.windscribe(['disconnect'])
                 sleep(5)
                 main.uploadMedia(torrent.content_path, torrentId, 'Uploading')
@@ -251,7 +263,7 @@ class main():
         else:
             for i in data[key]:
                 output.append(i[item])
-            return str(output)
+            return output
 
     def windscribe(arguments):
         subprocess.check_call([r"C:\Program Files (x86)\Windscribe\windscribe-cli.exe"] + arguments)
@@ -260,9 +272,14 @@ class main():
         try:
             getIP = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             getIP.connect(("8.8.8.8", 80))
-            currentIP = str([getIP.getsockname()[0]])
+            currentIP = str(getIP.getsockname()[0])
+            getIP = str(main.readConfig('/config.json','default', 'ip')[0])
 
-            if (currentIP == str(main.readConfig('/config.json','default', 'ip'))):
+            if (getIP == 'YOUR_IP'):
+                print('Please edit the config.json file and enter in your machines IP, Hint: run ipconfig')
+                exit()
+
+            elif (currentIP == getIP):
                 return False
             else:
                 return True
@@ -274,7 +291,7 @@ class main():
 while True:
     sleep(1)
     try:
-        if (main.checkVPN()):
+        if (main.checkVPN() or main.uploading):
             main.openTorrentClient()
             main.getPlexRequests()
             main.torrentClient('','','','','')
